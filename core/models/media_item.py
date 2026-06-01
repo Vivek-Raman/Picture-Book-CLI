@@ -15,8 +15,8 @@ class MediaItem:
     def create_table() -> str:
         return """
             CREATE TABLE IF NOT EXISTS media_item (
-                id UUID PRIMARY KEY DEFAULT (uuid4()),
+                id TEXT PRIMARY KEY,
                 path TEXT NOT NULL,
-                date_taken TEXT NOT NULL
+                date_taken TIMESTAMP
             )
         """

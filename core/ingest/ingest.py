@@ -1,7 +1,6 @@
-import os
 from pathlib import Path
 import click
-
+import uuid
 from core.db import db
 from .metadata import extract_metadata
 from core.models import MediaItem
@@ -9,11 +8,12 @@ from core.models import MediaItem
 
 def do_ingest(directory: Path) -> None:
     # find all picutres recursively
-
     for root, _, files in directory.walk():
         for file in files:
-            if file.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp",
-                                      ".tiff", ".webp", ".heic", ".mov")):
+            if file.lower().endswith((
+                    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp",
+                    ".heic", ".heif", ".mov", ".mp4", ".m4v", ".avi", ".mkv",
+                    ".webm", ".3gp", ".mpg", ".mpeg", ".wmv")):
                 _ingest_media(root / file)
     pass
 
@@ -37,8 +37,9 @@ def _ingest_media(file: Path) -> None:
     )
     with db() as conn:
         conn.execute(
-            "INSERT INTO media_items (path, date_taken) VALUES (?, ?)",
-            (media_item.path, media_item.date_taken.isoformat()))
+            "INSERT INTO media_item (id, path, date_taken) VALUES (?, ?, ?)",
+            (str(uuid.uuid4()), media_item.path.absolute().as_posix(),
+             media_item.date_taken))
         conn.commit()
 
     click.echo(f"Media item saved: {media_item}")

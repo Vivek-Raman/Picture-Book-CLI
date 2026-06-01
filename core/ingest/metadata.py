@@ -1,61 +1,86 @@
 from __future__ import annotations
 
 import json
-import click
-from fractions import Fraction
-from typing import Any
+import re
+import shutil
+import subprocess
+from datetime import datetime
 from pathlib import Path
-from PIL import Image
-from PIL.ExifTags import GPSTAGS, TAGS
+from typing import Any
 
+import click
 
-def _serialize_exif_value(value: Any) -> Any:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    if isinstance(value, tuple):
-        return [_serialize_exif_value(item) for item in value]
-    if isinstance(value, Fraction):
-        return float(value)
-    if hasattr(value, "numerator") and hasattr(value, "denominator"):
-        return float(value)
-    return value
+DATE_TAGS = (
+    "DateTimeOriginal",
+    "CreateDate",
+    "MediaCreateDate",
+    "TrackCreateDate",
+    "DateTimeDigitized",
+    "ModifyDate",
+)
 
-
-def _extract_exif(image: Image.Image) -> dict[str, Any]:
-    exif = image.getexif()
-    if not exif:
-        return {}
-
-    exif_data: dict[str, Any] = {}
-    for tag_id, value in exif.items():
-        tag = TAGS.get(tag_id, tag_id)
-        exif_data[str(tag)] = _serialize_exif_value(value)
-
-    gps_ifd = exif.get_ifd(0x8825)
-    if gps_ifd:
-        exif_data["GPSInfo"] = {
-            str(GPSTAGS.get(tag_id, tag_id)): _serialize_exif_value(value)
-            for tag_id, value in gps_ifd.items()
-        }
-
-    return exif_data
+_DATE_RE = re.compile(
+    r"(\d{4})[:-](\d{2})[:-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})")
 
 
 def extract_metadata(file: Path) -> dict:
-    try:
-        with Image.open(file.absolute().as_posix()) as image:
-            exif_data = _extract_exif(image)
-    except OSError as exc:
-        click.echo(f"No EXIF data for {file}: {exc}")
+    metadata = _run_exiftool(file)
+    if not metadata:
+        click.echo(f"No metadata for {file}")
         return {}
 
-    if not exif_data:
-        click.echo(f"No EXIF data for {file}")
+    click.echo(f"Metadata for {file}:")
+    click.echo(json.dumps(metadata, indent=2, default=str))
+
+    date_taken = _extract_date_taken(metadata)
+    if date_taken is None:
+        click.echo(f"No capture date for {file}")
         return {}
 
-    click.echo("Keys:")
-    click.echo(exif_data.keys())
+    return {"date_taken": date_taken}
 
-    click.echo(f"EXIF data for {file}:")
-    click.echo(json.dumps(exif_data, indent=2, default=str))
-    return {}
+
+def _parse_exif_date(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value)
+    match = _DATE_RE.match(str(value).strip())
+    if not match:
+        return None
+    year, month, day, hour, minute, second = map(int, match.groups())
+    return datetime(year, month, day, hour, minute, second)
+
+
+def _run_exiftool(file: Path) -> dict[str, Any]:
+    exiftool = shutil.which("exiftool")
+    if not exiftool:
+        click.echo(
+            "exiftool not found on PATH; install with: brew install exiftool",
+            err=True,
+        )
+        return {}
+
+    result = subprocess.run(
+        [exiftool, "-json", file.absolute().as_posix()],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip()
+        click.echo(f"exiftool failed for {file}: {stderr}", err=True)
+        return {}
+
+    records = json.loads(result.stdout)
+    if not records:
+        return {}
+    return records[0]
+
+
+def _extract_date_taken(metadata: dict[str, Any]) -> datetime | None:
+    for tag in DATE_TAGS:
+        date_taken = _parse_exif_date(metadata.get(tag))
+        if date_taken is not None:
+            return date_taken
+    return None
